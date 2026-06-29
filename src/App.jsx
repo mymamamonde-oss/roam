@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from "react";
 // /public folder, then set this to "/hero.jpg". Done — it goes live
 // for everyone. No backend, no storage. It ships with the app.
 // ══════════════════════════════════════════════════════════════
-const HERO_IMAGE = "/hero.jpg"; // your Cap dAntibes photo, ships with the app
+const HERO_IMAGE = "/hero.jpg"; // your photo, ships with the app
 
 // ══════════════════════════════════════════════════════════════
 // 🔧 AFFILIATE CONFIG — Roam by My Mama Monde
@@ -85,6 +85,7 @@ function TravelApp() {
   const [detail, setDetail] = useState(null);
   const [results, setResults] = useState([]);
   const [usedFallback, setUsedFallback] = useState(false);
+  const [fallbackReason, setFallbackReason] = useState("");
 
   const [origin, setOrigin] = useState("");
   const [country, setCountry] = useState("CA");
@@ -164,9 +165,11 @@ Return this JSON (fill every field):
 }
 
 Rules:
+- WRITE TIGHT. Every string short and scannable — phrases, not paragraphs. Lead with the concrete detail (real names, numbers, specifics), cut all filler, fluff, and marketing adjectives. A parent should grasp each line in one glance. Dense with info, light on words.
+- tagline: max ~12 words. whyThisTrip: max 2 short sentences. reasons/highlights/tips: each one short phrase (~6–10 words), not a sentence with sub-clauses.
 - Costs in ${currency.code}
-- 3 accommodation reasons per stop — parent-relevant
-- 3 highlights per stop — real places
+- 3 accommodation reasons per stop — parent-relevant, specific (e.g. "breakfast included", "pool + shallow end", "5-min walk to beach")
+- 3 highlights per stop — name real places, no vague "explore the town"
 - Max 5 packing items
 - 3 family tips
 - Under-2: plan 1–2 nap breaks daily
@@ -182,9 +185,21 @@ Rules:
 
   async function callModel(prompt) {
     const tried = [];
+    // 0) Your own backend (works on the deployed Vercel site — real AI)
+    try {
+      const r = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }) });
+      if (r.ok) {
+        const d = await r.json();
+        if (d && d.text) return extractObject(d.text);
+        throw new Error((d && d.error) || "empty backend response");
+      }
+      throw new Error("backend HTTP " + r.status);
+    } catch (e) { tried.push("backend: " + (e && e.message || e)); }
+    // 1) Claude.ai preview native bridge
     if (typeof window !== "undefined" && window.claude && typeof window.claude.complete === "function") {
       try { const out = await window.claude.complete(prompt); const text = typeof out === "string" ? out : (out && out.completion) || ""; if (!text) throw new Error("empty"); return extractObject(text); } catch (e) { tried.push("native: " + (e && e.message || e)); }
     } else { tried.push("native: unavailable"); }
+    // 2) Claude.ai preview direct fetch
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }) });
       const raw = await res.text(); if (!res.ok) throw new Error(`HTTP ${res.status}`); const data = JSON.parse(raw); if (data.error) throw new Error(data.error.message); const text = Array.isArray(data.content) ? data.content.map((b) => b.type === "text" ? b.text : "").join("") : ""; if (!text) throw new Error("no text"); return extractObject(text);
@@ -250,10 +265,16 @@ Rules:
 
   async function generate() {
     setUsedFallback(false);
+    setFallbackReason("");
     setScreen("loading");
     const settled = await Promise.allSettled(ANGLES.map((a) => callModel(buildPrompt(a))));
     const out = ANGLES.map((a, i) => { const s = settled[i]; if (s.status === "fulfilled" && s.value && typeof s.value === "object") return { ...s.value, id: i + 1, badge: s.value.badge || a.badge, _ai: true }; return { ...localPlan(a, i), _ai: false }; });
-    setUsedFallback(out.some((o) => !o._ai));
+    const anyFallback = out.some((o) => !o._ai);
+    setUsedFallback(anyFallback);
+    if (anyFallback) {
+      const firstReject = settled.find((s) => s.status === "rejected");
+      setFallbackReason(firstReject ? String((firstReject.reason && firstReject.reason.message) || firstReject.reason) : "unknown");
+    }
     setResults(out);
     setScreen("results");
   }
@@ -274,7 +295,7 @@ Rules:
       <div style={{ maxWidth: 480, margin: "0 auto", minHeight: "100vh", background: C.cream, position: "relative", overflow: "hidden" }}>
         {screen === "form" && <FormScreen origin={origin} setOrigin={setOrigin} explore={explore} setExplore={setExplore} destination={destination} setDestination={setDestination} adults={adults} setAdults={setAdults} children={children} setChildren={setChildren} ages={ages} setAges={setAges} days={days} setDays={setDays} budget={budget} setBudget={setBudget} flight={flight} setFlight={setFlight} transport={transport} setTransport={setTransport} style={style} setStyle={setStyle} maxStops={maxStops} setMaxStops={setMaxStops} namedStops={namedStops} setNamedStops={setNamedStops} tripMonths={tripMonths} setTripMonths={setTripMonths} currency={currency} generate={generate} />}
         {screen === "loading" && <LoadingScreen />}
-        {screen === "results" && <ResultsScreen results={results} usedFallback={usedFallback} onOpen={setDetail} onRestart={() => { setScreen("form"); setResults([]); }} />}
+        {screen === "results" && <ResultsScreen results={results} usedFallback={usedFallback} fallbackReason={fallbackReason} onOpen={setDetail} onRestart={() => { setScreen("form"); setResults([]); }} />}
         {detail && <DetailSheet trip={detail} country={country} onClose={() => setDetail(null)} />}
       </div>
     </div>
@@ -432,7 +453,7 @@ function LoadingScreen() {
   );
 }
 
-function ResultsScreen({ results, usedFallback, onOpen, onRestart }) {
+function ResultsScreen({ results, usedFallback, fallbackReason, onOpen, onRestart }) {
   return (
     <div style={{ animation: "fadeUp .4s ease", padding: "26px 22px 40px" }}>
       <button onClick={onRestart} style={bkl}>← Start over</button>
@@ -441,6 +462,11 @@ function ResultsScreen({ results, usedFallback, onOpen, onRestart }) {
       {usedFallback && (
         <div style={{ background: "rgba(155, 168, 158, .08)", color: C.sage, padding: "11px 14px", borderRadius: 12, fontSize: 12.5, fontWeight: 700, lineHeight: 1.5, marginBottom: 18 }}>
           Built with our offline planner — open claude.ai in a desktop browser for AI-powered itineraries.
+          {fallbackReason && (
+            <span style={{ display: "block", marginTop: 8, fontSize: 11, fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", opacity: 0.85, wordBreak: "break-word" }}>
+              diagnostic: {fallbackReason}
+            </span>
+          )}
         </div>
       )}
       {results.map((t, idx) => (
