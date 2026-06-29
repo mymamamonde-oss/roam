@@ -43,7 +43,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",   // Sonnet — richer, more specific plans (the whole point). Haiku id: claude-haiku-4-5-20251001
-        max_tokens: 1500,
+        max_tokens: 4096,
         messages: [{ role: "user", content: prompt }],
       }),
     });
